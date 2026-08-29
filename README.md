@@ -1,6 +1,6 @@
 # 漫画标签库 (Comic Tag Library)
 
-本机漫画标签管理工具：漫画按单本分文件夹保存，工具在不动文件夹结构的前提下，加一层**手动维护的 tag 元数据**，支持总览 / 筛选 / 详情编辑。
+本机漫画标签管理工具：漫画按单本分文件夹保存，工具在不动文件夹结构的前提下，加一层**手动维护的 tag 元数据**，支持总览 / 筛选 / 详情编辑。支持「单本」和「连载系列」两种目录结构。
 
 ## 功能
 
@@ -18,15 +18,24 @@
 - 启动后自动打开浏览器：<http://127.0.0.1:38417/>
 - 首次使用：点「设置」→ 粘贴漫画库总文件夹完整路径 → 保存
 
+## 目录结构规则
+
+根目录下有两种情况，工具会自动识别：
+
+- **单本**：文件夹内直接有图片 → 这个文件夹就是「一本」。
+- **连载系列**：文件夹内没有图片、但有子文件夹 → 视为系列容器，**递归扫描子文件夹**，每个含图片的子文件夹（如 `第01卷`）当作「一本」展示；系列容器本身不作为一本显示，卡片上会以「系列 / 卷名」的形式标注归属。
+
+空文件夹会被忽略。如果某个文件夹里既有图片又有子文件夹，则按「一本」处理（不继续下探）。
+
 ## 封面规则
 
-- 优先取文件夹内名为 `cover.jpg` / `cover.png` / `cover.webp` 等文件
+- 优先取该本文件夹内名为 `cover.jpg` / `cover.png` / `cover.webp` 等文件
 - 否则取文件夹内**第一张图片**（按文件名自然排序，如 `1.jpg < 2.jpg < 10.jpg`）
 
 ## 数据与注意事项
 
 - 数据文件：`data/comics.json`（含库路径和所有 tag），备份复制它即可
-- 每本漫画以**文件夹名**为唯一标识；如果在资源管理器里改了文件夹名，请在工具详情里用「重命名」同步（或重新添加）
+- 每本漫画以**相对库根的路径**为唯一标识（如 `连载甲/第01卷`）；如果在资源管理器里改了文件夹名，请在工具详情里用「重命名」同步（或重新添加）
 - 新放进库里的文件夹会自动出现在总览（归入「未分类」），手动打 tag 即可
 - 工具只监听 `127.0.0.1`，仅本机可访问，完全离线
 
@@ -51,14 +60,16 @@ comictool/
 
 ```
 GET    /api/state                       → 漫画列表 + 全部 tag + 库路径
-POST   /api/rescan                      → 扫描库目录，返回新增 / 消失的文件夹
+POST   /api/rescan                      → 扫描库目录，返回新增 / 消失的漫画
 POST   /api/config                      → 设置库路径
-GET    /api/cover?folder=<name>         → 返回该本封面图
-PUT    /api/comics/<folder>/tags        → 整体替换 tag 集合
-POST   /api/comics/<folder>/tags        → 增加一个或多个 tag
-DELETE /api/comics/<folder>/tags/<tag>  → 删除某个 tag
+GET    /api/cover?id=<相对路径>          → 返回该本封面图
+PUT    /api/comics/tags                 → 整体替换 tag 集合（body: id, tags）
+POST   /api/comics/tags                 → 增加一个或多个 tag（body: id, tags）
+POST   /api/comics/tags/delete          → 删除某个 tag（body: id, tag）
 POST   /api/tags/rename                 → 全局改名（同名 = 合并）
 POST   /api/tags/delete                 → 全局删除标签
-POST   /api/comics/rename               → 重命名文件夹并同步索引
-POST   /api/open-folder                 → 用资源管理器打开该本目录
+POST   /api/comics/rename               → 重命名文件夹并同步索引（body: id, to）
+POST   /api/open-folder                 → 用资源管理器打开该本目录（body: id）
+
+> id = 相对漫画库根的路径，用 `/` 分隔（如 `连载甲/第01卷`）；根级单本的 id 就是文件夹名。
 ```

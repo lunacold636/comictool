@@ -9,7 +9,7 @@ const state = {
   listFilter: 'all',
   search: '',
   sort: 'recent',
-  detailName: null,
+  detailId: null,
   settingsOpen: false,
   tagsOpen: false,
 };
@@ -40,10 +40,14 @@ async function load() {
 }
 
 // ---------- 筛选 ----------
+function comicTitle(c) {
+  return c.series ? c.series + ' / ' + c.name : c.name;
+}
+
 function filteredComics() {
   let list = state.data.comics;
   const q = state.search.trim().toLowerCase();
-  if (q) list = list.filter((c) => c.name.toLowerCase().includes(q));
+  if (q) list = list.filter((c) => comicTitle(c).toLowerCase().includes(q));
   if (state.listFilter === 'untagged') list = list.filter((c) => !c.tags.length);
   if (state.selectedTags.size > 0) {
     const sel = [...state.selectedTags];
@@ -54,7 +58,7 @@ function filteredComics() {
     ));
   }
   if (state.sort === 'name') {
-    list = [...list].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+    list = [...list].sort((a, b) => comicTitle(a).localeCompare(comicTitle(b), 'zh-CN'));
   } else {
     list = [...list].sort((a, b) => (b.addedAt || '').localeCompare(a.addedAt || ''));
   }
@@ -134,11 +138,13 @@ function renderGrid() {
     const tags = c.tags.slice(0, 3).map((t) => `<span class="mini-tag">${esc(t)}</span>`).join('');
     const more = c.tags.length > 3 ? `<span class="mini-tag more">+${c.tags.length - 3}</span>` : '';
     const thumb = c.hasCover
-      ? `<img class="thumb" loading="lazy" src="/api/cover?folder=${encodeURIComponent(c.name)}" alt="">`
+      ? `<img class="thumb" loading="lazy" src="/api/cover?id=${encodeURIComponent(c.id)}" alt="">`
       : `<div class="thumb placeholder">📕</div>`;
+    const series = c.series ? `<div class="card-series">${esc(c.series)}</div>` : '';
     return `
-      <div class="card" data-name="${esc(c.name)}">
+      <div class="card" data-id="${esc(c.id)}">
         <div class="card-cover">${thumb}</div>
+        ${series}
         <div class="card-name">${esc(c.name)}</div>
         <div class="card-tags">${tags}${more}</div>
       </div>`;
@@ -155,33 +161,37 @@ function renderCountline() {
 
 function renderModalRoot() {
   const root = $('#modal-root');
-  if (state.detailName) return renderDetail(root);
+  if (state.detailId) return renderDetail(root);
   if (state.settingsOpen) return renderSettings(root);
   if (state.tagsOpen) return renderTagsMgr(root);
   root.innerHTML = '';
 }
 
 function renderDetail(root) {
-  const c = state.data.comics.find((x) => x.name === state.detailName);
+  const c = state.data.comics.find((x) => x.id === state.detailId);
   if (!c) {
-    state.detailName = null;
+    state.detailId = null;
     return renderModalRoot();
   }
-  const fullPath = state.data.libraryRoot + '\\' + c.name;
+  const fullPath = state.data.libraryRoot.replace(/[\\/]+$/, '') + '\\' + c.id.replace(/\//g, '\\');
   const chips = c.tags.map((t) => `
     <span class="tag-chip big">
       <span>${esc(t)}</span>
       <button class="tag-x" data-remove="${esc(t)}" title="删除标签">×</button>
     </span>`).join('');
   const img = c.hasCover
-    ? `<img src="/api/cover?folder=${encodeURIComponent(c.name)}" alt="">`
+    ? `<img src="/api/cover?id=${encodeURIComponent(c.id)}" alt="">`
     : `<div class="thumb placeholder">📕</div>`;
+  const seriesLine = c.series
+    ? `<div class="detail-series">📚 系列：${esc(c.series)}</div>`
+    : '';
   root.innerHTML = `
     <div class="overlay">
       <div class="modal detail">
         <div class="detail-cover">${img}</div>
         <div class="detail-info">
           <h2>${esc(c.name)}</h2>
+          ${seriesLine}
           <div class="detail-path">${esc(fullPath)}</div>
           <div class="detail-actions">
             <button class="btn" data-action="open-folder">📂 打开文件夹</button>
@@ -212,7 +222,7 @@ function renderSettings(root) {
           <input id="root-input" type="text" value="${esc(d.libraryRoot)}" placeholder="例如 D:\\Comics">
           <button class="btn primary" id="save-root">保存</button>
         </div>
-        <p class="hint">请粘贴漫画库所在文件夹的完整路径（可在资源管理器地址栏复制）。保存后会自动扫描。</p>
+        <p class="hint">请粘贴漫画库所在文件夹的完整路径（可在资源管理器地址栏复制）。保存后会自动扫描。支持两级结构：根目录下既可以是单本文件夹，也可以是「连载系列文件夹」——系列下的子文件夹会被当作单本展示。</p>
         <div class="settings-actions">
           <button class="btn" id="open-tags-mgr">🏷 标签管理</button>
           <button class="btn" id="rescan-btn">⟳ 重新扫描</button>
@@ -253,7 +263,7 @@ function toggleTag(t) {
 }
 
 function closeModal() {
-  state.detailName = null;
+  state.detailId = null;
   state.settingsOpen = false;
   state.tagsOpen = false;
   renderModalRoot();
@@ -263,19 +273,19 @@ async function handleAction(a) {
   if (a === 'close') return closeModal();
   if (a === 'open-folder') {
     try {
-      await api('/api/open-folder', { method: 'POST', body: { name: state.detailName } });
+      await api('/api/open-folder', { method: 'POST', body: { id: state.detailId } });
     } catch (e) {
       alert(e.message);
     }
     return;
   }
   if (a === 'rename') {
-    const c = state.data.comics.find((x) => x.name === state.detailName);
+    const c = state.data.comics.find((x) => x.id === state.detailId);
     const name = prompt('输入新的文件夹名称：', c.name);
     if (!name || name.trim() === c.name) return;
     try {
-      await api('/api/comics/rename', { method: 'POST', body: { from: c.name, to: name.trim() } });
-      state.detailName = name.trim();
+      const r = await api('/api/comics/rename', { method: 'POST', body: { id: c.id, to: name.trim() } });
+      state.detailId = r.to;
       await load();
     } catch (e) {
       alert(e.message);
@@ -283,9 +293,9 @@ async function handleAction(a) {
   }
 }
 
-async function removeTag(name, tag) {
+async function removeTag(id, tag) {
   try {
-    await api(`/api/comics/${encodeURIComponent(name)}/tags/${encodeURIComponent(tag)}`, { method: 'DELETE' });
+    await api('/api/comics/tags/delete', { method: 'POST', body: { id, tag } });
     await load();
   } catch (e) {
     alert(e.message);
@@ -365,9 +375,9 @@ document.addEventListener('click', async (e) => {
     return renderDynamic();
   }
 
-  const card = e.target.closest('.card[data-name]');
+  const card = e.target.closest('.card[data-id]');
   if (card) {
-    state.detailName = card.dataset.name;
+    state.detailId = card.dataset.id;
     state.settingsOpen = false;
     state.tagsOpen = false;
     return render();
@@ -377,7 +387,7 @@ document.addEventListener('click', async (e) => {
   if (action) return handleAction(action.dataset.action);
 
   const x = e.target.closest('[data-remove]');
-  if (x) return removeTag(state.detailName, x.dataset.remove);
+  if (x) return removeTag(state.detailId, x.dataset.remove);
 
   const renameBtn = e.target.closest('[data-tag-rename]');
   if (renameBtn) return renameTagGlobal(renameBtn.dataset.tagRename);
@@ -409,7 +419,7 @@ document.addEventListener('submit', (e) => {
   if (!val) return;
   (async () => {
     try {
-      await api(`/api/comics/${encodeURIComponent(state.detailName)}/tags`, { method: 'POST', body: { tags: [val] } });
+      await api('/api/comics/tags', { method: 'POST', body: { id: state.detailId, tags: [val] } });
       input.value = '';
       await load();
     } catch (err) {
@@ -429,7 +439,7 @@ $('#sort').addEventListener('change', (e) => {
 $('#btn-rescan').addEventListener('click', doRescan);
 $('#btn-settings').addEventListener('click', () => {
   state.settingsOpen = true;
-  state.detailName = null;
+  state.detailId = null;
   state.tagsOpen = false;
   render();
 });

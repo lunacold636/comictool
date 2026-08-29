@@ -97,14 +97,6 @@ function validFolderName(name) {
     && !/[\\/]/.test(name) && !name.includes(':') && !name.startsWith('.');
 }
 
-function assertFolder(data, name) {
-  if (!validFolderName(name)) return null;
-  const root = (data.libraryRoot || '').trim();
-  if (!isValidRoot(root)) return null;
-  if (!listFolders(root).includes(name)) return null;
-  return path.join(root, name);
-}
-
 function cleanTags(arr) {
   const seen = new Set();
   const out = [];
@@ -118,29 +110,75 @@ function cleanTags(arr) {
   return out;
 }
 
+// ---------- 递归扫描 ----------
+// 规则：一个目录只要含图片就视为「一本」（停止下探）；
+//       无图但有子文件夹则视为「连载容器」，递归扫描子文件夹；
+//       两者皆无则忽略（空文件夹）。
+// id 用相对库根的路径（/ 分隔），如「连载A/第01卷」；根级单本 id = 文件夹名。
+function scanNode(absDir, relPath, out) {
+  const images = listImages(absDir);
+  if (images.length > 0) {
+    out.push({ id: relPath, absDir });
+    return;
+  }
+  for (const sub of listFolders(absDir)) {
+    const subRel = relPath ? relPath + '/' + sub : sub;
+    scanNode(path.join(absDir, sub), subRel, out);
+  }
+}
+
+function scanLibrary(root) {
+  const out = [];
+  for (const top of listFolders(root)) {
+    scanNode(path.join(root, top), top, out);
+  }
+  return out;
+}
+
+// 校验 id 并解析为库内绝对路径；非法返回 null
+function resolveId(data, id) {
+  if (typeof id !== 'string' || !id) return null;
+  const root = (data.libraryRoot || '').trim();
+  if (!isValidRoot(root)) return null;
+  const parts = id.split('/');
+  if (parts.some(part => !validFolderName(part))) return null;
+  const abs = path.resolve(root, ...parts);
+  if (abs !== root && !abs.startsWith(root + path.sep)) return null;
+  return abs;
+}
+
+// id 的父级（'' 表示库根）
+function parentId(id) {
+  const i = id.lastIndexOf('/');
+  return i === -1 ? '' : id.slice(0, i);
+}
+
 // ---------- 状态汇总 ----------
 function collectComics(data) {
   const root = (data.libraryRoot || '').trim();
   if (!isValidRoot(root)) {
     return { configured: false, libraryRoot: root, comics: [], tags: [], dataFile: DATA_FILE };
   }
-  const folders = listFolders(root);
   const now = new Date().toISOString();
   let changed = false;
   const comics = [];
-  for (const name of folders) {
-    let entry = data.comics[name];
+  for (const node of scanLibrary(root)) {
+    const { id, absDir } = node;
+    let entry = data.comics[id];
     if (!entry) {
       entry = { tags: [], addedAt: now, updatedAt: now };
-      data.comics[name] = entry;
+      data.comics[id] = entry;
       changed = true;
     }
+    const slash = id.indexOf('/');
     comics.push({
-      name,
+      id,
+      series: slash === -1 ? '' : id.slice(0, slash),
+      name: id.slice(slash === -1 ? 0 : slash + 1),
       tags: entry.tags || [],
       addedAt: entry.addedAt || null,
       updatedAt: entry.updatedAt || null,
-      hasCover: listImages(path.join(root, name)).length > 0,
+      hasCover: listImages(absDir).length > 0,
     });
   }
   if (changed) saveData(data);
@@ -183,18 +221,18 @@ async function handleApi(req, res, u, p) {
   if (p === '/api/rescan' && method === 'POST') {
     const root = (data.libraryRoot || '').trim();
     if (!isValidRoot(root)) return sendJSON(res, 400, { error: '漫画库路径未设置或不存在' });
-    const folders = listFolders(root);
     const now = new Date().toISOString();
+    const ids = scanLibrary(root).map(n => n.id);
     const added = [];
     let changed = false;
-    for (const name of folders) {
-      if (!data.comics[name]) {
-        data.comics[name] = { tags: [], addedAt: now, updatedAt: now };
-        added.push(name);
+    for (const id of ids) {
+      if (!data.comics[id]) {
+        data.comics[id] = { tags: [], addedAt: now, updatedAt: now };
+        added.push(id);
         changed = true;
       }
     }
-    const removed = Object.keys(data.comics).filter(n => !folders.includes(n));
+    const removed = Object.keys(data.comics).filter(n => !ids.includes(n));
     if (changed) saveData(data);
     return sendJSON(res, 200, { added, removed });
   }
@@ -243,76 +281,83 @@ async function handleApi(req, res, u, p) {
     return sendJSON(res, 200, { ok: true, changed });
   }
 
+  // 单本 tag 操作：PUT 整体替换 / POST 新增 / POST tags/delete 删除
+  if (p === '/api/comics/tags' && method === 'PUT') {
+    const body = await readBody(req);
+    const id = String(body.id || '').trim();
+    const comic = data.comics[id];
+    if (!comic) return sendJSON(res, 404, { error: '未找到漫画：' + id });
+    comic.tags = cleanTags(body.tags);
+    comic.updatedAt = new Date().toISOString();
+    saveData(data);
+    return sendJSON(res, 200, { id, tags: comic.tags });
+  }
+
+  if (p === '/api/comics/tags' && method === 'POST') {
+    const body = await readBody(req);
+    const id = String(body.id || '').trim();
+    const comic = data.comics[id];
+    if (!comic) return sendJSON(res, 404, { error: '未找到漫画：' + id });
+    comic.tags = cleanTags([...(comic.tags || []), ...cleanTags(body.tags)]);
+    comic.updatedAt = new Date().toISOString();
+    saveData(data);
+    return sendJSON(res, 200, { id, tags: comic.tags });
+  }
+
+  if (p === '/api/comics/tags/delete' && method === 'POST') {
+    const body = await readBody(req);
+    const id = String(body.id || '').trim();
+    const tag = String(body.tag || '').trim();
+    const comic = data.comics[id];
+    if (!comic) return sendJSON(res, 404, { error: '未找到漫画：' + id });
+    comic.tags = (comic.tags || []).filter(t => t !== tag);
+    comic.updatedAt = new Date().toISOString();
+    saveData(data);
+    return sendJSON(res, 200, { id, tags: comic.tags });
+  }
+
   if (p === '/api/comics/rename' && method === 'POST') {
     const body = await readBody(req);
-    const from = String(body.from || '').trim();
+    const id = String(body.id || '').trim();
     const to = String(body.to || '').trim();
     const root = (data.libraryRoot || '').trim();
     if (!isValidRoot(root)) return sendJSON(res, 400, { error: '漫画库路径未设置' });
-    const oldPath = assertFolder(data, from);
-    if (!oldPath) return sendJSON(res, 404, { error: '未找到漫画文件夹：' + from });
+    const oldPath = resolveId(data, id);
+    if (!oldPath) return sendJSON(res, 404, { error: '未找到漫画文件夹：' + id });
     if (!validFolderName(to)) return sendJSON(res, 400, { error: '新名称不合法' });
-    if (from === to) return sendJSON(res, 200, { ok: true });
-    const newPath = path.join(root, to);
+    const leaf = id.slice(id.lastIndexOf('/') + 1);
+    if (leaf === to) return sendJSON(res, 200, { ok: true });
+    const newPath = path.join(path.dirname(oldPath), to);
     if (fs.existsSync(newPath)) return sendJSON(res, 400, { error: '目标文件夹已存在：' + to });
     try {
       fs.renameSync(oldPath, newPath);
     } catch (e) {
       return sendJSON(res, 500, { error: '重命名失败：' + e.message });
     }
-    if (data.comics[from]) {
-      data.comics[to] = data.comics[from];
-      delete data.comics[from];
-      data.comics[to].updatedAt = new Date().toISOString();
+    const parent = parentId(id);
+    const newId = parent ? parent + '/' + to : to;
+    if (data.comics[id]) {
+      data.comics[newId] = data.comics[id];
+      delete data.comics[id];
+      data.comics[newId].updatedAt = new Date().toISOString();
       saveData(data);
     }
-    return sendJSON(res, 200, { ok: true, from, to });
+    return sendJSON(res, 200, { ok: true, from: id, to: newId });
   }
 
   if (p === '/api/open-folder' && method === 'POST') {
     const body = await readBody(req);
-    const name = String(body.name || '').trim();
-    const folder = assertFolder(data, name);
-    if (!folder) return sendJSON(res, 404, { error: '未找到漫画文件夹：' + name });
+    const id = String(body.id || '').trim();
+    const folder = resolveId(data, id);
+    if (!folder) return sendJSON(res, 404, { error: '未找到漫画文件夹：' + id });
     if (process.platform !== 'win32') return sendJSON(res, 400, { error: '仅支持 Windows' });
     spawn('explorer.exe', [folder], { detached: true, stdio: 'ignore' }).unref();
     return sendJSON(res, 200, { ok: true });
   }
 
-  // /api/comics/<name>/tags 与 /api/comics/<name>/tags/<tag>
-  const m = p.match(/^\/api\/comics\/([^/]+)\/tags(?:\/(.+))?$/);
-  if (m) {
-    const name = m[1];
-    const folder = assertFolder(data, name);
-    if (!folder) return sendJSON(res, 404, { error: '未找到漫画文件夹：' + name });
-    const comic = data.comics[name];
-    if (method === 'PUT') {
-      const body = await readBody(req);
-      comic.tags = cleanTags(body.tags);
-      comic.updatedAt = new Date().toISOString();
-      saveData(data);
-      return sendJSON(res, 200, { name, tags: comic.tags });
-    }
-    if (method === 'POST' && !m[2]) {
-      const body = await readBody(req);
-      comic.tags = cleanTags([...(comic.tags || []), ...cleanTags(body.tags)]);
-      comic.updatedAt = new Date().toISOString();
-      saveData(data);
-      return sendJSON(res, 200, { name, tags: comic.tags });
-    }
-    if (method === 'DELETE' && m[2]) {
-      const tag = m[2];
-      comic.tags = (comic.tags || []).filter(t => t !== tag);
-      comic.updatedAt = new Date().toISOString();
-      saveData(data);
-      return sendJSON(res, 200, { name, tags: comic.tags });
-    }
-    return sendJSON(res, 405, { error: '不支持的方法' });
-  }
-
   if (p === '/api/cover' && method === 'GET') {
-    const name = u.searchParams.get('folder') || '';
-    const folder = assertFolder(data, name);
+    const id = u.searchParams.get('id') || '';
+    const folder = resolveId(data, id);
     if (!folder) return sendJSON(res, 404, { error: 'not found' });
     const images = listImages(folder);
     if (!images.length) return sendJSON(res, 404, { error: 'no image' });
