@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>漫画标签库</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">📚 漫画标签库</div>
+    <div class="topbar-controls">
+      <input id="search" type="search" placeholder="搜索漫画名称…" autocomplete="off">
+      <select id="sort" title="排序">
+        <option value="recent">最近添加</option>
+        <option value="name">名称排序</option>
+      </select>
+      <button class="btn icon" id="btn-rescan" title="重新扫描">⟳</button>
+      <button class="btn" id="btn-settings">⚙ 设置</button>
+    </div>
+  </header>
+  <nav class="tagbar" id="tagbar"></nav>
+  <div class="countline" id="countline"></div>
+  <main class="grid" id="grid"></main>
+  <div class="empty hidden" id="empty"></div>
+  <div id="modal-root"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
