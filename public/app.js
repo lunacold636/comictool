@@ -65,7 +65,11 @@ function filteredComics() {
 function render() {
   const d = state.data;
   if (!d) return;
-  if (!d.configured) return renderSetup();
+  if (!d.configured) {
+    renderSetup();
+    renderModalRoot();
+    return;
+  }
   renderTagbar();
   renderGrid();
   renderCountline();
@@ -90,7 +94,6 @@ function renderSetup() {
       <button class="btn primary" id="goto-settings">打开设置</button>
     </div>`;
   $('#empty').classList.add('hidden');
-  $('#modal-root').innerHTML = '';
 }
 
 function renderTagbar() {
