@@ -41,13 +41,13 @@ async function load() {
 
 // ---------- 筛选 ----------
 function comicTitle(c) {
-  return c.series ? c.series + ' / ' + c.name : c.name;
+  return c.series ? c.series + '-' + c.name : c.name;
 }
 
 function filteredComics() {
   let list = state.data.comics;
   const q = state.search.trim().toLowerCase();
-  if (q) list = list.filter((c) => comicTitle(c).toLowerCase().includes(q));
+  if (q) list = list.filter((c) => (comicTitle(c) + " " + (c.series || "") + " " + c.name).toLowerCase().includes(q));
   if (state.listFilter === 'untagged') list = list.filter((c) => !c.tags.length);
   if (state.selectedTags.size > 0) {
     const sel = [...state.selectedTags];
@@ -140,12 +140,10 @@ function renderGrid() {
     const thumb = c.hasCover
       ? `<img class="thumb" loading="lazy" src="/api/cover?id=${encodeURIComponent(c.id)}" alt="">`
       : `<div class="thumb placeholder">📕</div>`;
-    const series = c.series ? `<div class="card-series">${esc(c.series)}</div>` : '';
     return `
       <div class="card" data-id="${esc(c.id)}">
         <div class="card-cover">${thumb}</div>
-        ${series}
-        <div class="card-name">${esc(c.name)}</div>
+        <div class="card-name">${esc(comicTitle(c))}</div>
         <div class="card-tags">${tags}${more}</div>
       </div>`;
   }).join('');
@@ -182,16 +180,12 @@ function renderDetail(root) {
   const img = c.hasCover
     ? `<img src="/api/cover?id=${encodeURIComponent(c.id)}" alt="">`
     : `<div class="thumb placeholder">📕</div>`;
-  const seriesLine = c.series
-    ? `<div class="detail-series">📚 系列：${esc(c.series)}</div>`
-    : '';
   root.innerHTML = `
     <div class="overlay">
       <div class="modal detail">
         <div class="detail-cover">${img}</div>
         <div class="detail-info">
-          <h2>${esc(c.name)}</h2>
-          ${seriesLine}
+          <h2>${esc(comicTitle(c))}</h2>
           <div class="detail-path">${esc(fullPath)}</div>
           <div class="detail-actions">
             <button class="btn" data-action="open-folder">📂 打开文件夹</button>
