@@ -5,6 +5,7 @@ const $ = (sel) => document.querySelector(sel);
 const state = {
   data: null,
   selectedTags: new Set(),
+  selectedAuthors: new Set(),
   filterMode: 'and',
   listFilter: 'all',
   search: '',
@@ -48,7 +49,7 @@ function comicTitle(c) {
 }
 
 function seriesByName(name) {
-  return (state.data.series || []).find((s) => s.name === name) || { name, tags: [] };
+  return (state.data.series || []).find((s) => s.name === name) || { name, tags: [], authors: [] };
 }
 
 function seriesVolumes(name) {
@@ -92,12 +93,21 @@ function itemTags(it) {
   return [...set];
 }
 
+function itemAuthors(it) {
+  if (it.kind === 'comic') return it.comic.authors || [];
+  const set = new Set();
+  for (const v of it.volumes) for (const a of (v.authors || [])) set.add(a);
+  return [...set];
+}
+
 function itemSearchText(it) {
   if (it.kind === 'comic') {
     const c = it.comic;
-    return (comicTitle(c) + ' ' + (c.series || '') + ' ' + c.name).toLowerCase();
+    return (comicTitle(c) + ' ' + (c.series || '') + ' ' + c.name + ' ' + (c.authors || []).join(' ')).toLowerCase();
   }
-  return (it.series.name + ' ' + it.volumes.map((v) => v.name).join(' ') + ' ' + itemTitle(it)).toLowerCase();
+  const authors = new Set();
+  for (const v of it.volumes) for (const a of (v.authors || [])) authors.add(a);
+  return (it.series.name + ' ' + it.volumes.map((v) => v.name).join(' ') + ' ' + itemTitle(it) + ' ' + [...authors].join(' ')).toLowerCase();
 }
 
 function itemRecent(it) {
@@ -119,6 +129,15 @@ function filteredItems() {
         : sel.some((t) => tags.includes(t));
     });
   }
+  if (state.selectedAuthors.size > 0) {
+    const sel = [...state.selectedAuthors];
+    list = list.filter((it) => {
+      const authors = itemAuthors(it);
+      return state.filterMode === 'and'
+        ? sel.every((a) => authors.includes(a))
+        : sel.some((a) => authors.includes(a));
+    });
+  }
   if (state.sort === 'name') {
     list = [...list].sort((a, b) => itemTitle(a).localeCompare(itemTitle(b), 'zh-CN'));
   } else {
@@ -131,6 +150,7 @@ function filteredItems() {
 function tagStats() {
   const items = buildItems();
   const map = new Map();
+  const authorMap = new Map();
   let untagged = 0;
   let seriesCount = 0;
   for (const it of items) {
@@ -138,8 +158,9 @@ function tagStats() {
     const tags = itemTags(it);
     if (!tags.length) untagged++;
     for (const t of tags) map.set(t, (map.get(t) || 0) + 1);
+    for (const a of itemAuthors(it)) authorMap.set(a, (authorMap.get(a) || 0) + 1);
   }
-  return { map, untagged, total: items.length, seriesCount };
+  return { map, authorMap, untagged, total: items.length, seriesCount };
 }
 
 // ---------- 渲染 ----------
@@ -198,13 +219,22 @@ function renderTagbar() {
       `<button class="chip${state.selectedTags.has(t.name) ? ' on' : ''}" data-tag="${esc(t.name)}">${esc(t.name)} (${count})</button>`
     );
   }
+  const authorChips = (d.authors || []).map((a) => {
+    const count = stats.authorMap.get(a.name) || 0;
+    return `<button class="chip author-chip${state.selectedAuthors.has(a.name) ? ' on' : ''}" data-author="${esc(a.name)}">${esc(a.name)} (${count})</button>`;
+  }).join('');
   const mode = `
     <div class="mode-toggle">
       <span class="mode-label">筛选</span>
       <button class="seg${state.filterMode === 'and' ? ' on' : ''}" data-mode="and">AND</button>
       <button class="seg${state.filterMode === 'or' ? ' on' : ''}" data-mode="or">OR</button>
     </div>`;
-  $('#tagbar').innerHTML = chips.join('') + mode;
+  $('#tagbar').innerHTML = `
+    <div class="filter-group">
+      <div class="filter-row">${chips.join('')}</div>
+      ${authorChips ? `<div class="filter-row authors-filter-row"><span class="filter-title">👤 作者</span>${authorChips}</div>` : ''}
+    </div>
+    ${mode}`;
 }
 
 function renderGrid() {
@@ -226,6 +256,9 @@ function renderGrid() {
 function renderComicCard(c) {
   const tags = c.tags.slice(0, 3).map((t) => `<span class="mini-tag">${esc(t)}</span>`).join('');
   const more = c.tags.length > 3 ? `<span class="mini-tag more">+${c.tags.length - 3}</span>` : '';
+  const authors = (c.authors || []).slice(0, 2).map((a) => `<span class="mini-author">${esc(a)}</span>`).join('');
+  const moreAuthors = (c.authors || []).length > 2 ? `<span class="mini-author more">+${(c.authors || []).length - 2}</span>` : '';
+  const authorsHtml = authors || moreAuthors ? `<span class="author-ico">👤</span>${authors}${moreAuthors}` : '';
   const thumb = c.hasCover
     ? `<img class="thumb" loading="lazy" src="/api/cover?id=${encodeURIComponent(c.id)}" alt="">`
     : '<div class="thumb placeholder">📕</div>';
@@ -233,6 +266,7 @@ function renderComicCard(c) {
     <div class="card" data-id="${esc(c.id)}">
       <div class="card-cover">${thumb}</div>
       <div class="card-name">${esc(comicTitle(c))}</div>
+      ${authorsHtml ? `<div class="card-authors">${authorsHtml}</div>` : ''}
       <div class="card-tags">${tags}${more}</div>
     </div>`;
 }
@@ -241,6 +275,10 @@ function renderSeriesCard(it) {
   const all = itemTags(it);
   const tags = all.slice(0, 3).map((t) => `<span class="mini-tag">${esc(t)}</span>`).join('');
   const more = all.length > 3 ? `<span class="mini-tag more">+${all.length - 3}</span>` : '';
+  const allAuthors = itemAuthors(it);
+  const authors = allAuthors.slice(0, 2).map((a) => `<span class="mini-author">${esc(a)}</span>`).join('');
+  const moreAuthors = allAuthors.length > 2 ? `<span class="mini-author more">+${allAuthors.length - 2}</span>` : '';
+  const authorsHtml = authors || moreAuthors ? `<span class="author-ico">👤</span>${authors}${moreAuthors}` : '';
   const thumb = it.first.hasCover
     ? `<img class="thumb" loading="lazy" src="/api/cover?id=${encodeURIComponent(it.first.id)}" alt="">`
     : '<div class="thumb placeholder">📕</div>';
@@ -251,6 +289,7 @@ function renderSeriesCard(it) {
         <div class="series-badge" title="连载全集，点击管理全系列">📚 连载 · ${it.volumes.length}集</div>
       </div>
       <div class="card-name">${esc(itemTitle(it))}</div>
+      ${authorsHtml ? `<div class="card-authors">${authorsHtml}</div>` : ''}
       <div class="card-tags">${tags}${more}</div>
     </div>`;
 }
@@ -261,10 +300,10 @@ function renderCountline() {
   const shown = filteredItems().length;
   const stats = tagStats();
   if (state.viewMode === 'single') {
-    $('#countline').textContent = `共 ${d.comics.length} 本 · 未分类 ${stats.untagged} 本 · 当前显示 ${shown} 本`;
+    $('#countline').textContent = `共 ${d.comics.length} 本 · 未分类 ${stats.untagged} 本 · 当前显示 ${shown} 本 · 作者 ${d.authors.length} 人`;
   } else {
     const singleCount = d.comics.filter((c) => !c.series).length;
-    $('#countline').textContent = `系列 ${stats.seriesCount} 部 · 单本 ${singleCount} 本 · 合计 ${stats.total} 项 · 未分类 ${stats.untagged} · 当前显示 ${shown}`;
+    $('#countline').textContent = `系列 ${stats.seriesCount} 部 · 单本 ${singleCount} 本 · 合计 ${stats.total} 项 · 未分类 ${stats.untagged} · 当前显示 ${shown} · 作者 ${d.authors.length} 人`;
   }
 }
 
@@ -290,6 +329,13 @@ function renderDetail(root) {
       return `<span class="tag-chip big series-tag" title="系列标签：在系列详情中修改，自动应用到全系列"><span class="series-mark">系列</span><span>${esc(t)}</span></span>`;
     }
     return `<span class="tag-chip big"><span>${esc(t)}</span><button class="tag-x" data-remove="${esc(t)}" title="删除标签">×</button></span>`;
+  }).join('');
+  const seriesAuthors = c.series ? new Set(seriesByName(c.series).authors || []) : new Set();
+  const authorChips = (c.authors || []).map((a) => {
+    if (seriesAuthors.has(a)) {
+      return `<span class="author-chip big series-author" title="系列作者：在系列详情中修改，自动应用到全系列"><span class="author-mark">系列</span><span>${esc(a)}</span></span>`;
+    }
+    return `<span class="author-chip big"><span>${esc(a)}</span><button class="tag-x" data-aremove="${esc(a)}" title="删除作者">×</button></span>`;
   }).join('');
   const img = c.hasCover
     ? `<img src="/api/cover?id=${encodeURIComponent(c.id)}" alt="">`
@@ -322,6 +368,13 @@ function renderDetail(root) {
             <datalist id="tag-list">${state.data.tags.map((t) => `<option value="${esc(t.name)}">`).join('')}</datalist>
             <button class="btn primary" type="submit">添加</button>
           </form>
+          <h3>作者${c.series ? ' <span class="hint">（带「系列」标记的作者改一个全系列生效）</span>' : ''}</h3>
+          <div class="detail-tags author-tags">${authorChips || '<span class="hint">暂无作者</span>'}</div>
+          <form class="add-tag" id="add-author-form">
+            <input id="add-author-input" list="author-list" placeholder="输入新作者，或从已有作者选择" autocomplete="off">
+            <datalist id="author-list">${(state.data.authors || []).map((a) => `<option value="${esc(a.name)}">`).join('')}</datalist>
+            <button class="btn primary" type="submit">添加</button>
+          </form>
           <p class="hint">标签全部由你手动维护，不会自动生成。</p>
         </div>
       </div>
@@ -346,6 +399,11 @@ function renderSeriesDetail(root) {
       <span>${esc(t)}</span>
       <button class="tag-x" data-sremove="${esc(t)}" title="从整个系列删除">×</button>
     </span>`).join('');
+  const authorChips = (s.authors || []).map((a) => `
+    <span class="author-chip big">
+      <span>${esc(a)}</span>
+      <button class="tag-x" data-saremove="${esc(a)}" title="从整个系列删除作者">×</button>
+    </span>`).join('');
   const rows = vols.map((v, i) => `
     <div class="vol-row" data-vol="${esc(v.id)}" title="点击编辑该单集标签">
       <div class="vol-idx">${i + 1}</div>
@@ -355,6 +413,7 @@ function renderSeriesDetail(root) {
       <div class="vol-main">
         <div class="vol-name">${esc(comicTitle(v))}</div>
         <div class="vol-tags">${v.tags.slice(0, 4).map((t) => `<span class="mini-tag">${esc(t)}</span>`).join('') || '<span class="hint">无标签</span>'}</div>
+        <div class="vol-authors">${(v.authors || []).slice(0, 3).map((a) => `<span class="mini-author">${esc(a)}</span>`).join('') || ''}</div>
       </div>
       <button class="btn small" data-vol-edit="${esc(v.id)}">编辑</button>
     </div>`).join('');
@@ -377,6 +436,13 @@ function renderSeriesDetail(root) {
           <form class="add-tag" id="series-add-tag-form">
             <input id="series-add-tag-input" list="series-tag-list" placeholder="输入新标签，或从已有标签选择" autocomplete="off">
             <datalist id="series-tag-list">${state.data.tags.map((t) => `<option value="${esc(t.name)}">`).join('')}</datalist>
+            <button class="btn primary" type="submit">添加</button>
+          </form>
+          <h3>系列作者 <span class="hint">（改一个，全系列 ${vols.length} 集都生效）</span></h3>
+          <div class="detail-tags author-tags">${authorChips || '<span class="hint">暂无作者</span>'}</div>
+          <form class="add-tag" id="series-add-author-form">
+            <input id="series-add-author-input" list="series-author-list" placeholder="输入新作者，或从已有作者选择" autocomplete="off">
+            <datalist id="series-author-list">${(state.data.authors || []).map((a) => `<option value="${esc(a.name)}">`).join('')}</datalist>
             <button class="btn primary" type="submit">添加</button>
           </form>
           <h3>单集列表（${vols.length}）</h3>
@@ -419,12 +485,24 @@ function renderTagsMgr(root) {
         <button class="btn small danger" data-tag-delete="${esc(t.name)}">删除</button>
       </span>
     </div>`).join('');
+  const authorRows = (d.authors || []).map((a) => `
+    <div class="tag-row author-row">
+      <span class="tag-name">${esc(a.name)}</span>
+      <span class="tag-count">${a.count} 本</span>
+      <span class="tag-actions">
+        <button class="btn small" data-author-rename="${esc(a.name)}">改名</button>
+        <button class="btn small danger" data-author-delete="${esc(a.name)}">删除</button>
+      </span>
+    </div>`).join('');
   root.innerHTML = `
     <div class="overlay">
       <div class="modal tags-mgr">
-        <h2>标签管理</h2>
+        <h2>🏷 标签管理</h2>
         <p class="hint">改名会把该标签同步到所有漫画和系列；改名成已有标签 = 合并；删除会从所有漫画和系列移除。</p>
         <div class="tag-list">${rows || '<span class="hint">还没有任何标签。</span>'}</div>
+        <h2 class="author-section-title">👤 作者管理</h2>
+        <p class="hint">作者与标签独立，专门用于按作者搜索和筛选。改名会把该作者同步到所有漫画和系列；改名成已有作者 = 合并；删除会从所有漫画和系列移除。</p>
+        <div class="tag-list">${authorRows || '<span class="hint">还没有任何作者。</span>'}</div>
         <button class="btn ghost close-btn">关闭</button>
       </div>
     </div>`;
@@ -564,10 +642,57 @@ function showToast(msg) {
   t._timer = setTimeout(() => t.classList.remove('show'), 2200);
 }
 
+function toggleAuthor(a) {
+  if (state.selectedAuthors.has(a)) state.selectedAuthors.delete(a);
+  else state.selectedAuthors.add(a);
+  renderDynamic();
+}
+
+async function removeAuthor(id, author) {
+  try {
+    await api('/api/comics/authors/delete', { method: 'POST', body: { id, author } });
+    await load();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+async function removeSeriesAuthor(name, author) {
+  try {
+    await api('/api/series/authors/delete', { method: 'POST', body: { name, author } });
+    await load();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+async function renameAuthorGlobal(from) {
+  const to = prompt(`将作者「${from}」改名为：`, from);
+  if (!to || to.trim() === from) return;
+  try {
+    await api('/api/authors/rename', { method: 'POST', body: { from, to: to.trim() } });
+    await load();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+async function deleteAuthorGlobal(author) {
+  if (!confirm(`确定从所有漫画中删除作者「${author}」吗？`)) return;
+  try {
+    await api('/api/authors/delete', { method: 'POST', body: { author } });
+    await load();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
 // ---------- 事件 ----------
 document.addEventListener('click', async (e) => {
   const chip = e.target.closest('[data-tag]');
   if (chip) return toggleTag(chip.dataset.tag);
+  const authorChip = e.target.closest('[data-author]');
+  if (authorChip) return toggleAuthor(authorChip.dataset.author);
 
   const filterBtn = e.target.closest('[data-filter]');
   if (filterBtn) {
@@ -621,15 +746,24 @@ document.addEventListener('click', async (e) => {
 
   const srem = e.target.closest('[data-sremove]');
   if (srem) return removeSeriesTag(state.seriesDetail, srem.dataset.sremove);
+  const sarem = e.target.closest('[data-saremove]');
+  if (sarem) return removeSeriesAuthor(state.seriesDetail, sarem.dataset.saremove);
 
   const x = e.target.closest('[data-remove]');
   if (x) return removeTag(state.detailId, x.dataset.remove);
+  const arem = e.target.closest('[data-aremove]');
+  if (arem) return removeAuthor(state.detailId, arem.dataset.aremove);
 
   const renameBtn = e.target.closest('[data-tag-rename]');
   if (renameBtn) return renameTagGlobal(renameBtn.dataset.tagRename);
 
   const delBtn = e.target.closest('[data-tag-delete]');
   if (delBtn) return deleteTagGlobal(delBtn.dataset.tagDelete);
+  const authorRenameBtn = e.target.closest('[data-author-rename]');
+  if (authorRenameBtn) return renameAuthorGlobal(authorRenameBtn.dataset.authorRename);
+
+  const authorDelBtn = e.target.closest('[data-author-delete]');
+  if (authorDelBtn) return deleteAuthorGlobal(authorDelBtn.dataset.authorDelete);
 
   if (e.target.closest('#save-root')) return saveRoot();
   if (e.target.closest('#open-tags-mgr')) {
@@ -649,8 +783,40 @@ document.addEventListener('click', async (e) => {
 document.addEventListener('submit', (e) => {
   const volForm = e.target.closest('#add-tag-form');
   const seriesForm = e.target.closest('#series-add-tag-form');
-  if (!volForm && !seriesForm) return;
+  const volAuthorForm = e.target.closest('#add-author-form');
+  const seriesAuthorForm = e.target.closest('#series-add-author-form');
+  if (!volForm && !seriesForm && !volAuthorForm && !seriesAuthorForm) return;
   e.preventDefault();
+  if (seriesAuthorForm) {
+    const input = $('#series-add-author-input');
+    const val = input.value.trim();
+    if (!val) return;
+    (async () => {
+      try {
+        await api('/api/series/authors', { method: 'POST', body: { name: state.seriesDetail, authors: [val] } });
+        input.value = '';
+        await load();
+      } catch (err) {
+        alert(err.message);
+      }
+    })();
+    return;
+  }
+  if (volAuthorForm) {
+    const input = $('#add-author-input');
+    const val = input.value.trim();
+    if (!val) return;
+    (async () => {
+      try {
+        await api('/api/comics/authors', { method: 'POST', body: { id: state.detailId, authors: [val] } });
+        input.value = '';
+        await load();
+      } catch (err) {
+        alert(err.message);
+      }
+    })();
+    return;
+  }
   if (seriesForm) {
     const input = $('#series-add-tag-input');
     const val = input.value.trim();

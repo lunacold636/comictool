@@ -157,7 +157,7 @@ function parentId(id) {
 function collectComics(data) {
   const root = (data.libraryRoot || '').trim();
   if (!isValidRoot(root)) {
-    return { configured: false, libraryRoot: root, comics: [], series: [], tags: [], dataFile: DATA_FILE };
+    return { configured: false, libraryRoot: root, comics: [], series: [], authors: [], tags: [], dataFile: DATA_FILE };
   }
   if (!data.series) data.series = {};
   const now = new Date().toISOString();
@@ -167,24 +167,27 @@ function collectComics(data) {
     const { id, absDir } = node;
     let entry = data.comics[id];
     if (!entry) {
-      entry = { tags: [], addedAt: now, updatedAt: now };
+      entry = { tags: [], authors: [], addedAt: now, updatedAt: now };
       data.comics[id] = entry;
       changed = true;
     }
     const slash = id.indexOf('/');
     const series = slash === -1 ? '' : id.slice(0, slash);
     if (series && !data.series[series]) {
-      data.series[series] = { tags: [], addedAt: now, updatedAt: now };
+      data.series[series] = { tags: [], authors: [], addedAt: now, updatedAt: now };
       changed = true;
     }
     const own = entry.tags || [];
     // 单卷有效标签 = 系列标签 + 该卷自身标签（系列标签自动应用到全系列）
     const eff = series ? cleanTags([...(data.series[series].tags || []), ...own]) : own.slice();
+    const ownA = entry.authors || [];
+    const effA = series ? cleanTags([...(data.series[series].authors || []), ...ownA]) : cleanTags(ownA);
     comics.push({
       id,
       series,
       name: id.slice(slash === -1 ? 0 : slash + 1),
       tags: eff,
+      authors: effA,
       addedAt: entry.addedAt || null,
       updatedAt: entry.updatedAt || null,
       hasCover: listImages(absDir).length > 0,
@@ -200,6 +203,7 @@ function collectComics(data) {
     seriesList.push({
       name,
       tags: cleanTags(se ? se.tags : []),
+      authors: cleanTags(se ? (se.authors || []) : []),
       addedAt: se ? (se.addedAt || null) : null,
       updatedAt: se ? (se.updatedAt || null) : null,
     });
@@ -209,7 +213,12 @@ function collectComics(data) {
   const tags = [...tagMap.entries()]
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-CN'));
-  return { configured: true, libraryRoot: root, comics, series: seriesList, tags, dataFile: DATA_FILE };
+  const authorMap = new Map();
+  for (const c of comics) for (const a of (c.authors || [])) authorMap.set(a, (authorMap.get(a) || 0) + 1);
+  const authors = [...authorMap.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-CN'));
+  return { configured: true, libraryRoot: root, comics, series: seriesList, authors, tags, dataFile: DATA_FILE };
 }
 
 // ---------- HTTP 工具 ----------
@@ -306,6 +315,56 @@ async function handleApi(req, res, u, p) {
     return sendJSON(res, 200, { ok: true, changed });
   }
 
+  // 全局作者改名 / 删除（同步到所有漫画与系列）
+  if (p === '/api/authors/rename' && method === 'POST') {
+    const body = await readBody(req);
+    const from = String(body.from || '').trim();
+    const to = String(body.to || '').trim();
+    if (!from || !to) return sendJSON(res, 400, { error: '缺少参数 from/to' });
+    let changed = false;
+    if (from !== to) {
+      for (const c of Object.values(data.comics)) {
+        if ((c.authors || []).includes(from)) {
+          c.authors = cleanTags((c.authors || []).map(t => t === from ? to : t));
+          c.updatedAt = new Date().toISOString();
+          changed = true;
+        }
+      }
+      for (const sd of Object.values(data.series || {})) {
+        if ((sd.authors || []).includes(from)) {
+          sd.authors = cleanTags((sd.authors || []).map(t => t === from ? to : t));
+          sd.updatedAt = new Date().toISOString();
+          changed = true;
+        }
+      }
+    }
+    if (changed) saveData(data);
+    return sendJSON(res, 200, { ok: true, changed });
+  }
+
+  if (p === '/api/authors/delete' && method === 'POST') {
+    const body = await readBody(req);
+    const author = String(body.author || body.tag || '').trim();
+    if (!author) return sendJSON(res, 400, { error: '缺少参数 author' });
+    let changed = false;
+    for (const c of Object.values(data.comics)) {
+      if ((c.authors || []).includes(author)) {
+        c.authors = (c.authors || []).filter(t => t !== author);
+        c.updatedAt = new Date().toISOString();
+        changed = true;
+      }
+    }
+    for (const sd of Object.values(data.series || {})) {
+      if ((sd.authors || []).includes(author)) {
+        sd.authors = (sd.authors || []).filter(t => t !== author);
+        sd.updatedAt = new Date().toISOString();
+        changed = true;
+      }
+    }
+    if (changed) saveData(data);
+    return sendJSON(res, 200, { ok: true, changed });
+  }
+
   if (p === '/api/tags/delete' && method === 'POST') {
     const body = await readBody(req);
     const tag = String(body.tag || '').trim();
@@ -362,6 +421,39 @@ async function handleApi(req, res, u, p) {
     return sendJSON(res, 200, { name, tags: se.tags });
   }
 
+  // 系列作者：整体替换 / 新增 / 删除（系列作者自动应用到该系列全部单集）
+  if (p === '/api/series/authors' && method === 'PUT') {
+    const body = await readBody(req);
+    const name = String(body.name || '').trim();
+    const se = data.series && data.series[name];
+    if (!se) return sendJSON(res, 404, { error: '未找到系列：' + name });
+    se.authors = cleanTags(body.authors);
+    se.updatedAt = new Date().toISOString();
+    saveData(data);
+    return sendJSON(res, 200, { name, authors: se.authors });
+  }
+  if (p === '/api/series/authors' && method === 'POST') {
+    const body = await readBody(req);
+    const name = String(body.name || '').trim();
+    const se = data.series && data.series[name];
+    if (!se) return sendJSON(res, 404, { error: '未找到系列：' + name });
+    se.authors = cleanTags([...(se.authors || []), ...cleanTags(body.authors)]);
+    se.updatedAt = new Date().toISOString();
+    saveData(data);
+    return sendJSON(res, 200, { name, authors: se.authors });
+  }
+  if (p === '/api/series/authors/delete' && method === 'POST') {
+    const body = await readBody(req);
+    const name = String(body.name || '').trim();
+    const author = String(body.author || '').trim();
+    const se = data.series && data.series[name];
+    if (!se) return sendJSON(res, 404, { error: '未找到系列：' + name });
+    se.authors = (se.authors || []).filter(t => t !== author);
+    se.updatedAt = new Date().toISOString();
+    saveData(data);
+    return sendJSON(res, 200, { name, authors: se.authors });
+  }
+
   // 单本 tag 操作：PUT 整体替换 / POST 新增 / POST tags/delete 删除
   if (p === '/api/comics/tags' && method === 'PUT') {
     const body = await readBody(req);
@@ -395,6 +487,41 @@ async function handleApi(req, res, u, p) {
     comic.updatedAt = new Date().toISOString();
     saveData(data);
     return sendJSON(res, 200, { id, tags: comic.tags });
+  }
+
+  // 单本作者：PUT 整体替换 / POST 新增 / POST authors/delete 删除
+  if (p === '/api/comics/authors' && method === 'PUT') {
+    const body = await readBody(req);
+    const id = String(body.id || '').trim();
+    const comic = data.comics[id];
+    if (!comic) return sendJSON(res, 404, { error: '未找到漫画：' + id });
+    comic.authors = cleanTags(body.authors);
+    comic.updatedAt = new Date().toISOString();
+    saveData(data);
+    return sendJSON(res, 200, { id, authors: comic.authors });
+  }
+
+  if (p === '/api/comics/authors' && method === 'POST') {
+    const body = await readBody(req);
+    const id = String(body.id || '').trim();
+    const comic = data.comics[id];
+    if (!comic) return sendJSON(res, 404, { error: '未找到漫画：' + id });
+    comic.authors = cleanTags([...(comic.authors || []), ...cleanTags(body.authors)]);
+    comic.updatedAt = new Date().toISOString();
+    saveData(data);
+    return sendJSON(res, 200, { id, authors: comic.authors });
+  }
+
+  if (p === '/api/comics/authors/delete' && method === 'POST') {
+    const body = await readBody(req);
+    const id = String(body.id || '').trim();
+    const author = String(body.author || '').trim();
+    const comic = data.comics[id];
+    if (!comic) return sendJSON(res, 404, { error: '未找到漫画：' + id });
+    comic.authors = (comic.authors || []).filter(t => t !== author);
+    comic.updatedAt = new Date().toISOString();
+    saveData(data);
+    return sendJSON(res, 200, { id, authors: comic.authors });
   }
 
   if (p === '/api/comics/rename' && method === 'POST') {

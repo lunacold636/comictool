@@ -6,9 +6,10 @@
 
 - **总览**：卡片网格展示所有漫画（封面缩略图 + 名称 + tag）
 - **视图切换**：顶栏「单本 / 全集」一键切换（默认全集，记忆上次选择）；全集视图把连载系列聚合为一张卡片，卡片带「📚 连载 · N集」角标，封面与名称取系列第一个子文件夹
-- **筛选**：按 tag 筛选（AND / OR 可切换）、未分类、名称搜索、排序
+- **筛选**：按 tag 筛选（AND / OR 可切换）、未分类、搜索（支持漫画名 / 作者）、排序
 - **详情**：点进单本查看 tag、添加 / 删除 tag、打开文件夹、重命名文件夹
 - **系列标签**：在系列卡片或单本详情的「编辑系列标签」中维护，一次标记即应用到该系列全部单集；系列弹窗内可列出全部单集、逐集编辑 tag
+- **作者**：与 tag 独立的手动元数据（绿色系展示，和 tag 明显区分）。可按作者搜索、筛选（跟随 AND / OR），卡片与详情展示作者，单本 / 系列均可维护；系列作者一次标记应用到全系列。设置 → 标签管理 里可对作者全局改名（同名 = 合并）或删除
 - **全局标签管理**：改名（改名成已有标签 = 合并）、删除
 - **数据**：本地 JSON 文件（`data/comics.json`），复制即备份
 - 所有 tag 均为手动输入维护，**不做任何自动识别**
@@ -58,7 +59,7 @@
 ## 数据与注意事项
 
 - 数据文件：`data/comics.json`（含库路径、所有 tag 与系列元数据），备份复制它即可
-- 数据结构：`comics` 按相对路径存每本 tag；`series` 存系列级 tag（`{ 系列名: { tags, addedAt, updatedAt } }`），单卷生效标签 = 系列标签 + 该卷自身标签
+- 数据结构：`comics` 按相对路径存每本 tag 与 authors；`series` 存系列级 tag 与 authors（`{ 系列名: { tags, authors, addedAt, updatedAt } }`）。单卷生效标签 = 系列标签 + 该卷自身标签；作者同理：单卷生效作者 = 系列作者 + 该卷自身作者
 - 每本漫画以**相对库根的路径**为唯一标识（如 `连载甲/第01卷`）；如果在资源管理器里改了文件夹名，请在工具详情里用「重命名」同步（或重新添加）
 - 新放进库里的文件夹会自动出现在总览（归入「未分类」），手动打 tag 即可
 - 工具只监听 `127.0.0.1`，仅本机可访问，完全离线
@@ -98,6 +99,14 @@ POST   /api/tags/delete                 → 全局删除标签（同步系列标
 PUT    /api/series/tags                 → 整体替换系列标签（body: name, tags）
 POST   /api/series/tags                 → 给系列增加标签（body: name, tags）
 POST   /api/series/tags/delete          → 删除系列某个标签（body: name, tag）
+PUT    /api/comics/authors               → 整体替换单本作者集合（body: id, authors）
+POST   /api/comics/authors               → 增加单本作者（body: id, authors）
+POST   /api/comics/authors/delete        → 删除单本某作者（body: id, author）
+PUT    /api/series/authors               → 整体替换系列作者（body: name, authors）
+POST   /api/series/authors               → 给系列增加作者（body: name, authors）
+POST   /api/series/authors/delete        → 删除系列某作者（body: name, author）
+POST   /api/authors/rename               → 全局作者改名（同名 = 合并，同步漫画与系列）
+POST   /api/authors/delete               → 全局删除作者（同步漫画与系列）
 POST   /api/comics/rename               → 重命名文件夹并同步索引（body: id, to）
 POST   /api/open-folder                 → 用资源管理器打开该本目录（body: id）
 

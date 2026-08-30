@@ -271,3 +271,54 @@ select#sort {
 .vol-name { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vol-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .vol-tags .mini-tag { font-size: 10px; }
+
+/* ===== 作者（与标签视觉明显区分，绿色系） ===== */
+.filter-group { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+.filter-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.filter-title { color: var(--muted); font-size: 12px; white-space: nowrap; margin-right: 2px; }
+.authors-filter-row { margin-top: 2px; }
+.chip.author-chip { border-color: #9adbb0; color: #0f766e; }
+.chip.author-chip:hover { border-color: #16a34a; }
+.chip.author-chip.on { background: #16a34a; border-color: #16a34a; color: #fff; }
+@media (prefers-color-scheme: dark) {
+  .chip.author-chip { border-color: #1f5e43; color: #5ee6ad; }
+  .chip.author-chip.on { background: #16a34a; color: #fff; }
+}
+
+.card-authors { padding: 2px 10px 0; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.author-ico { font-size: 11px; }
+.mini-author {
+  font-size: 11px; padding: 1px 7px; border-radius: 999px;
+  background: rgba(22, 163, 74, .12); color: #0f766e;
+}
+.mini-author.more { background: var(--border); color: var(--muted); }
+@media (prefers-color-scheme: dark) {
+  .mini-author { background: rgba(22, 163, 74, .2); color: #5ee6ad; }
+}
+
+.author-tags { margin-top: 4px; }
+.author-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: rgba(22, 163, 74, .12); color: #0f766e;
+  padding: 3px 6px 3px 12px; border-radius: 999px; font-size: 13px;
+}
+.author-chip.series-author { padding: 3px 10px; }
+.author-chip .tag-x { color: inherit; }
+@media (prefers-color-scheme: dark) {
+  .author-chip { background: rgba(22, 163, 74, .2); color: #5ee6ad; }
+}
+.author-mark {
+  background: #16a34a; color: #fff;
+  font-size: 10px; padding: 1px 6px; border-radius: 999px;
+  margin-right: 2px; white-space: nowrap;
+}
+
+.author-section-title { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border); }
+.tag-row.author-row { border-color: rgba(22, 163, 74, .35); }
+.tag-row.author-row .tag-name { color: #0f766e; }
+@media (prefers-color-scheme: dark) {
+  .tag-row.author-row .tag-name { color: #5ee6ad; }
+}
+
+.vol-authors { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.vol-authors .mini-author { font-size: 10px; }
