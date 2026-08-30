@@ -34,7 +34,7 @@ function loadData() {
     const raw = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
     if (raw && typeof raw === 'object') return raw;
   } catch (_) { /* 首次运行 */ }
-  return { version: 1, libraryRoot: '', comics: {} };
+  return { version: 1, libraryRoot: '', comics: {}, series: {} };
 }
 
 function saveData(data) {
@@ -157,8 +157,9 @@ function parentId(id) {
 function collectComics(data) {
   const root = (data.libraryRoot || '').trim();
   if (!isValidRoot(root)) {
-    return { configured: false, libraryRoot: root, comics: [], tags: [], dataFile: DATA_FILE };
+    return { configured: false, libraryRoot: root, comics: [], series: [], tags: [], dataFile: DATA_FILE };
   }
+  if (!data.series) data.series = {};
   const now = new Date().toISOString();
   let changed = false;
   const comics = [];
@@ -171,23 +172,44 @@ function collectComics(data) {
       changed = true;
     }
     const slash = id.indexOf('/');
+    const series = slash === -1 ? '' : id.slice(0, slash);
+    if (series && !data.series[series]) {
+      data.series[series] = { tags: [], addedAt: now, updatedAt: now };
+      changed = true;
+    }
+    const own = entry.tags || [];
+    // 单卷有效标签 = 系列标签 + 该卷自身标签（系列标签自动应用到全系列）
+    const eff = series ? cleanTags([...(data.series[series].tags || []), ...own]) : own.slice();
     comics.push({
       id,
-      series: slash === -1 ? '' : id.slice(0, slash),
+      series,
       name: id.slice(slash === -1 ? 0 : slash + 1),
-      tags: entry.tags || [],
+      tags: eff,
       addedAt: entry.addedAt || null,
       updatedAt: entry.updatedAt || null,
       hasCover: listImages(absDir).length > 0,
     });
   }
   if (changed) saveData(data);
+  // 系列列表：只保留当前仍有卷的系列
+  const present = new Set();
+  for (const c of comics) if (c.series) present.add(c.series);
+  const seriesList = [];
+  for (const name of [...present].sort((a, b) => a.localeCompare(b, 'zh-CN'))) {
+    const se = data.series[name];
+    seriesList.push({
+      name,
+      tags: cleanTags(se ? se.tags : []),
+      addedAt: se ? (se.addedAt || null) : null,
+      updatedAt: se ? (se.updatedAt || null) : null,
+    });
+  }
   const tagMap = new Map();
   for (const c of comics) for (const t of c.tags) tagMap.set(t, (tagMap.get(t) || 0) + 1);
   const tags = [...tagMap.entries()]
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-CN'));
-  return { configured: true, libraryRoot: root, comics, tags, dataFile: DATA_FILE };
+  return { configured: true, libraryRoot: root, comics, series: seriesList, tags, dataFile: DATA_FILE };
 }
 
 // ---------- HTTP 工具 ----------
@@ -233,8 +255,20 @@ async function handleApi(req, res, u, p) {
       }
     }
     const removed = Object.keys(data.comics).filter(n => !ids.includes(n));
+    // 清理已不存在的系列（系列 = id 第一段）
+    const presentSeries = new Set();
+    for (const id of ids) {
+      const slash = id.indexOf('/');
+      if (slash !== -1) presentSeries.add(id.slice(0, slash));
+    }
+    if (!data.series) data.series = {};
+    const removedSeries = Object.keys(data.series).filter(n => !presentSeries.has(n));
+    if (removedSeries.length) {
+      for (const n of removedSeries) delete data.series[n];
+      changed = true;
+    }
     if (changed) saveData(data);
-    return sendJSON(res, 200, { added, removed });
+    return sendJSON(res, 200, { added, removed, removedSeries });
   }
 
   if (p === '/api/config' && method === 'POST') {
@@ -260,6 +294,13 @@ async function handleApi(req, res, u, p) {
           changed = true;
         }
       }
+      for (const sd of Object.values(data.series || {})) {
+        if ((sd.tags || []).includes(from)) {
+          sd.tags = cleanTags((sd.tags || []).map(t => t === from ? to : t));
+          sd.updatedAt = new Date().toISOString();
+          changed = true;
+        }
+      }
     }
     if (changed) saveData(data);
     return sendJSON(res, 200, { ok: true, changed });
@@ -277,8 +318,48 @@ async function handleApi(req, res, u, p) {
         changed = true;
       }
     }
+    for (const sd of Object.values(data.series || {})) {
+      if ((sd.tags || []).includes(tag)) {
+        sd.tags = sd.tags.filter(t => t !== tag);
+        sd.updatedAt = new Date().toISOString();
+        changed = true;
+      }
+    }
     if (changed) saveData(data);
     return sendJSON(res, 200, { ok: true, changed });
+  }
+
+  // 系列标签：整体替换 / 新增 / 删除（系列标签自动应用到该系列全部单集）
+  if (p === '/api/series/tags' && method === 'PUT') {
+    const body = await readBody(req);
+    const name = String(body.name || '').trim();
+    const se = data.series && data.series[name];
+    if (!se) return sendJSON(res, 404, { error: '未找到系列：' + name });
+    se.tags = cleanTags(body.tags);
+    se.updatedAt = new Date().toISOString();
+    saveData(data);
+    return sendJSON(res, 200, { name, tags: se.tags });
+  }
+  if (p === '/api/series/tags' && method === 'POST') {
+    const body = await readBody(req);
+    const name = String(body.name || '').trim();
+    const se = data.series && data.series[name];
+    if (!se) return sendJSON(res, 404, { error: '未找到系列：' + name });
+    se.tags = cleanTags([...(se.tags || []), ...cleanTags(body.tags)]);
+    se.updatedAt = new Date().toISOString();
+    saveData(data);
+    return sendJSON(res, 200, { name, tags: se.tags });
+  }
+  if (p === '/api/series/tags/delete' && method === 'POST') {
+    const body = await readBody(req);
+    const name = String(body.name || '').trim();
+    const tag = String(body.tag || '').trim();
+    const se = data.series && data.series[name];
+    if (!se) return sendJSON(res, 404, { error: '未找到系列：' + name });
+    se.tags = (se.tags || []).filter(t => t !== tag);
+    se.updatedAt = new Date().toISOString();
+    saveData(data);
+    return sendJSON(res, 200, { name, tags: se.tags });
   }
 
   // 单本 tag 操作：PUT 整体替换 / POST 新增 / POST tags/delete 删除

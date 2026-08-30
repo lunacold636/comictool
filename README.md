@@ -5,8 +5,10 @@
 ## 功能
 
 - **总览**：卡片网格展示所有漫画（封面缩略图 + 名称 + tag）
+- **视图切换**：顶栏「单本 / 全集」一键切换（默认全集，记忆上次选择）；全集视图把连载系列聚合为一张卡片，卡片带「📚 连载 · N集」角标，封面与名称取系列第一个子文件夹
 - **筛选**：按 tag 筛选（AND / OR 可切换）、未分类、名称搜索、排序
 - **详情**：点进单本查看 tag、添加 / 删除 tag、打开文件夹、重命名文件夹
+- **系列标签**：在系列卡片或单本详情的「编辑系列标签」中维护，一次标记即应用到该系列全部单集；系列弹窗内可列出全部单集、逐集编辑 tag
 - **全局标签管理**：改名（改名成已有标签 = 合并）、删除
 - **数据**：本地 JSON 文件（`data/comics.json`），复制即备份
 - 所有 tag 均为手动输入维护，**不做任何自动识别**
@@ -46,6 +48,8 @@
 
 空文件夹会被忽略。如果某个文件夹里既有图片又有子文件夹，则按「一本」处理（不继续下探）。
 
+> 顶栏「单本 / 全集」：**单本视图**每个子文件夹一张卡；**全集视图**（默认）把同一系列的子文件夹聚合为一张卡片（用第一本的名字展示，带连载角标），点击卡片进入系列弹窗，可统一维护系列 tag 或逐集编辑。
+
 ## 封面规则
 
 - 优先取该本文件夹内名为 `cover.jpg` / `cover.png` / `cover.webp` 等文件
@@ -53,7 +57,8 @@
 
 ## 数据与注意事项
 
-- 数据文件：`data/comics.json`（含库路径和所有 tag），备份复制它即可
+- 数据文件：`data/comics.json`（含库路径、所有 tag 与系列元数据），备份复制它即可
+- 数据结构：`comics` 按相对路径存每本 tag；`series` 存系列级 tag（`{ 系列名: { tags, addedAt, updatedAt } }`），单卷生效标签 = 系列标签 + 该卷自身标签
 - 每本漫画以**相对库根的路径**为唯一标识（如 `连载甲/第01卷`）；如果在资源管理器里改了文件夹名，请在工具详情里用「重命名」同步（或重新添加）
 - 新放进库里的文件夹会自动出现在总览（归入「未分类」），手动打 tag 即可
 - 工具只监听 `127.0.0.1`，仅本机可访问，完全离线
@@ -88,8 +93,11 @@ GET    /api/cover?id=<相对路径>          → 返回该本封面图
 PUT    /api/comics/tags                 → 整体替换 tag 集合（body: id, tags）
 POST   /api/comics/tags                 → 增加一个或多个 tag（body: id, tags）
 POST   /api/comics/tags/delete          → 删除某个 tag（body: id, tag）
-POST   /api/tags/rename                 → 全局改名（同名 = 合并）
-POST   /api/tags/delete                 → 全局删除标签
+POST   /api/tags/rename                 → 全局改名（同名 = 合并，同步系列标签）
+POST   /api/tags/delete                 → 全局删除标签（同步系列标签）
+PUT    /api/series/tags                 → 整体替换系列标签（body: name, tags）
+POST   /api/series/tags                 → 给系列增加标签（body: name, tags）
+POST   /api/series/tags/delete          → 删除系列某个标签（body: name, tag）
 POST   /api/comics/rename               → 重命名文件夹并同步索引（body: id, to）
 POST   /api/open-folder                 → 用资源管理器打开该本目录（body: id）
 
